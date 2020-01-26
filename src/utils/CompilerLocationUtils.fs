@@ -1,5 +1,12 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
+#if BLAZOR
+namespace FSharp.Compiler.Service
+
+module FSharpEnvironment =
+    let mutable ForcedBinFolder = None
+#endif
+
 namespace Internal.Utilities
 
 open System
@@ -174,10 +181,6 @@ module internal FSharpEnvironment =
             Some locationFromAppConfig
 #endif
 
-#if BLAZOR
-    let mutable ForcedBinFolder = None
-#endif
-
     // The default location of FSharp.Core.dll and fsc.exe based on the version of fsc.exe that is running
     // Used for
     //     - location of design-time copies of FSharp.Core.dll and FSharp.Compiler.Interactive.Settings.dll for the default assumed environment for scripts
@@ -187,7 +190,7 @@ module internal FSharpEnvironment =
     //     - default F# binaries directory in (project system) Project.fs
     let BinFolderOfDefaultFSharpCompiler(probePoint:string option) =
 #if BLAZOR
-        match ForcedBinFolder with
+        match FSharp.Compiler.Service.FSharpEnvironment.ForcedBinFolder with
         | Some f -> Some f
         | None ->
 #endif
