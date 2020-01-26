@@ -1,20 +1,20 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-module internal Microsoft.FSharp.Compiler.InnerLambdasToTopLevelFuncs 
+module internal FSharp.Compiler.InnerLambdasToTopLevelFuncs 
 
-open Microsoft.FSharp.Compiler 
-open Microsoft.FSharp.Compiler.AbstractIL.Internal 
-open Microsoft.FSharp.Compiler.AbstractIL.Internal.Library 
-open Microsoft.FSharp.Compiler.AbstractIL.Diagnostics
-open Microsoft.FSharp.Compiler.Ast
-open Microsoft.FSharp.Compiler.ErrorLogger
-open Microsoft.FSharp.Compiler.Tast
-open Microsoft.FSharp.Compiler.Tastops
-open Microsoft.FSharp.Compiler.Tastops.DebugPrint
-open Microsoft.FSharp.Compiler.TcGlobals
-open Microsoft.FSharp.Compiler.Layout
-open Microsoft.FSharp.Compiler.Detuple.GlobalUsageAnalysis
-open Microsoft.FSharp.Compiler.Lib
+open FSharp.Compiler 
+open FSharp.Compiler.AbstractIL.Internal 
+open FSharp.Compiler.AbstractIL.Internal.Library 
+open FSharp.Compiler.AbstractIL.Diagnostics
+open FSharp.Compiler.Ast
+open FSharp.Compiler.ErrorLogger
+open FSharp.Compiler.Tast
+open FSharp.Compiler.Tastops
+open FSharp.Compiler.Tastops.DebugPrint
+open FSharp.Compiler.TcGlobals
+open FSharp.Compiler.Layout
+open FSharp.Compiler.Detuple.GlobalUsageAnalysis
+open FSharp.Compiler.Lib
 
 let verboseTLR = false
 
@@ -1280,9 +1280,9 @@ module Pass4_RewriteAssembly =
             let rhs,z = TransModuleDef penv z rhs
             ModuleOrNamespaceBinding.Module(nm,rhs),z
 
-    let TransImplFile penv z (TImplFile(fragName,pragmas,moduleExpr,hasExplicitEntryPoint,isScript)) =        
+    let TransImplFile penv z (TImplFile(fragName,pragmas,moduleExpr,hasExplicitEntryPoint,isScript,anonRecdTypes)) =        
         let moduleExpr,z = TransModuleExpr penv z moduleExpr
-        (TImplFile(fragName,pragmas,moduleExpr,hasExplicitEntryPoint,isScript)),z
+        (TImplFile(fragName,pragmas,moduleExpr,hasExplicitEntryPoint,isScript,anonRecdTypes)),z
 
 //-------------------------------------------------------------------------
 // pass5: copyExpr

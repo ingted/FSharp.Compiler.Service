@@ -1,4 +1,4 @@
-﻿
+
 #if INTERACTIVE
 #r "../../Debug/fcs/net45/FSharp.Compiler.Service.dll" // note, run 'build fcs debug' to generate this, this DLL has a public API so can be used from F# Interactive
 #r "../../packages/NUnit.3.5.0/lib/net45/nunit.framework.dll"
@@ -8,8 +8,8 @@
 module Tests.Service.AnalyzeAndBuildTests
 #endif
 
-open Microsoft.FSharp.Compiler
-open Microsoft.FSharp.Compiler.SourceCodeServices
+open FSharp.Compiler
+open FSharp.Compiler.SourceCodeServices
 
 open NUnit.Framework
 open FsUnit
@@ -18,7 +18,7 @@ open System.IO
 
 open System
 open System.Collections.Generic
-open Microsoft.FSharp.Compiler.SourceCodeServices
+open FSharp.Compiler.SourceCodeServices
 open FSharp.Compiler.Service.Tests.Common
 
 let internal checker = FSharpChecker.Create(keepAssemblyContents = true)

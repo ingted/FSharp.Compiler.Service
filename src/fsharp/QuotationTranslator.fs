@@ -1,23 +1,23 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-module internal Microsoft.FSharp.Compiler.QuotationTranslator
+module internal FSharp.Compiler.QuotationTranslator
 
 open Internal.Utilities
-open Microsoft.FSharp.Compiler 
-open Microsoft.FSharp.Compiler.AbstractIL.IL 
-open Microsoft.FSharp.Compiler.AbstractIL.Internal.Library
-open Microsoft.FSharp.Compiler.AbstractIL.Diagnostics
-open Microsoft.FSharp.Compiler.Tast
-open Microsoft.FSharp.Compiler.Tastops
-open Microsoft.FSharp.Compiler.Lib
-open Microsoft.FSharp.Compiler.Ast
-open Microsoft.FSharp.Compiler.PrettyNaming
-open Microsoft.FSharp.Compiler.ErrorLogger
-open Microsoft.FSharp.Compiler.TcGlobals
-open Microsoft.FSharp.Compiler.Range
+open FSharp.Compiler 
+open FSharp.Compiler.AbstractIL.IL 
+open FSharp.Compiler.AbstractIL.Internal.Library
+open FSharp.Compiler.AbstractIL.Diagnostics
+open FSharp.Compiler.Tast
+open FSharp.Compiler.Tastops
+open FSharp.Compiler.Lib
+open FSharp.Compiler.Ast
+open FSharp.Compiler.PrettyNaming
+open FSharp.Compiler.ErrorLogger
+open FSharp.Compiler.TcGlobals
+open FSharp.Compiler.Range
 open System.Collections.Generic
 
-module QP = Microsoft.FSharp.Compiler.QuotationPickler
+module QP = FSharp.Compiler.QuotationPickler
 
 let verboseCReflect = condition "VERBOSE_CREFLECT"
 
@@ -66,7 +66,7 @@ type QuotationGenerationScope =
 
     static member ComputeQuotationFormat g = 
         let deserializeExValRef = ValRefForIntrinsic g.deserialize_quoted_FSharp_40_plus_info 
-        if deserializeExValRef.TryDeref.IsSome then 
+        if ValueOptionInternal.isSome deserializeExValRef.TryDeref then 
             QuotationSerializationFormat.FSharp_40_Plus
         else 
             QuotationSerializationFormat.FSharp_20_Plus
@@ -423,6 +423,20 @@ and private ConvExprCore cenv (env : QuotationTranslationEnv) (expr: Expr) : QP.
             let tyargsR = ConvTypes cenv env m tyargs
             let argsR = ConvExprs cenv env args
             QP.mkRecdMk(rgtypR,tyargsR,argsR)
+
+        | TOp.AnonRecd anonInfo, _, _  ->  
+            let tref = anonInfo.ILTypeRef
+            let rgtypR = ConvILTypeRef cenv tref
+            let tyargsR = ConvTypes cenv env m tyargs
+            let argsR = ConvExprs cenv env args
+            QP.mkRecdMk(rgtypR,tyargsR,argsR)
+
+        | TOp.AnonRecdGet (anonInfo, n), _, _  ->  
+            let tref = anonInfo.ILTypeRef
+            let rgtypR = ConvILTypeRef cenv tref
+            let tyargsR = ConvTypes cenv env m tyargs
+            let argsR = ConvExprs cenv env args
+            QP.mkRecdGet((rgtypR,anonInfo.SortedNames.[n]),tyargsR,argsR)
 
         | TOp.UnionCaseFieldGet (ucref,n),tyargs,[e] -> 
             ConvUnionFieldGet cenv env m ucref n tyargs e
@@ -807,6 +821,10 @@ and ConvType cenv env m ty =
 
     | TType_fun(a,b)          -> QP.mkFunTy(ConvType cenv env m a,ConvType cenv env m b)
     | TType_tuple(tupInfo,l)  -> ConvType cenv env m (mkCompiledTupleTy cenv.g (evalTupInfoIsStruct tupInfo) l)
+    | TType_anon(anonInfo,tinst) -> 
+        let tref = anonInfo.ILTypeRef
+        let tinstR = ConvTypes cenv env m tinst
+        QP.mkILNamedTy(ConvILTypeRefUnadjusted cenv m tref, tinstR)
     | TType_var(tp)           -> QP.mkVarTy(ConvTyparRef cenv env m tp)
     | TType_forall(_spec,_ty)   -> wfail(Error(FSComp.SR.crefNoInnerGenericsInQuotations(),m))
     | _ -> wfail(Error (FSComp.SR.crefQuotationsCantContainThisType(),m))
@@ -960,12 +978,12 @@ and ConvILTypeRef cenv (tr:ILTypeRef) =
         QP.Idx idx
  
     | QuotationSerializationFormat.FSharp_20_Plus ->
-        let assref = 
+        let assemblyRef = 
             match tr.Scope with 
             | ILScopeRef.Local -> "."
             | _ -> tr.Scope.QualifiedName 
 
-        QP.Named(tr.BasicQualifiedName, assref)
+        QP.Named(tr.BasicQualifiedName, assemblyRef)
   
 and ConvVoidType cenv m = QP.mkILNamedTy(ConvTyconRef cenv cenv.g.system_Void_tcref m, [])
 

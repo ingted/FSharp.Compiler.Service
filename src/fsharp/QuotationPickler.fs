@@ -1,13 +1,13 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-module internal Microsoft.FSharp.Compiler.QuotationPickler
+module internal FSharp.Compiler.QuotationPickler
 
 
 open System.Text
 open Internal.Utilities.Collections
-open Microsoft.FSharp.Compiler.AbstractIL.Internal
-open Microsoft.FSharp.Compiler
-open Microsoft.FSharp.Compiler.Lib
+open FSharp.Compiler.AbstractIL.Internal
+open FSharp.Compiler
+open FSharp.Compiler.Lib
 
 let mkRLinear mk (vs,body) = List.foldBack (fun v acc -> mk (v,acc)) vs body 
 
@@ -304,12 +304,12 @@ module SimplePickle =
 open SimplePickle
 
 
-let p_assref x st = p_string x st
+let p_assemblyref x st = p_string x st
 
 let p_NamedType x st = 
     match x with 
-    | Idx n -> p_tup2 p_string p_assref (string n, "") st
-    | Named (nm,ass) -> p_tup2 p_string p_assref (nm, ass) st
+    | Idx n -> p_tup2 p_string p_assemblyref (string n, "") st
+    | Named (nm,a) -> p_tup2 p_string p_assemblyref (nm, a) st
 
 let p_tycon x st = 
     match x with

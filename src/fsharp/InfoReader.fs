@@ -2,23 +2,23 @@
 
 
 /// Select members from a type by name, searching the type hierarchy if needed
-module internal Microsoft.FSharp.Compiler.InfoReader
+module internal FSharp.Compiler.InfoReader
 
 open System.Collections.Generic
 
-open Microsoft.FSharp.Compiler.AbstractIL.IL 
-open Microsoft.FSharp.Compiler.AbstractIL.Internal.Library
+open FSharp.Compiler.AbstractIL.IL 
+open FSharp.Compiler.AbstractIL.Internal.Library
 
-open Microsoft.FSharp.Compiler 
-open Microsoft.FSharp.Compiler.AccessibilityLogic
-open Microsoft.FSharp.Compiler.Ast
-open Microsoft.FSharp.Compiler.AttributeChecking
-open Microsoft.FSharp.Compiler.ErrorLogger
-open Microsoft.FSharp.Compiler.Infos
-open Microsoft.FSharp.Compiler.Range
-open Microsoft.FSharp.Compiler.Tast
-open Microsoft.FSharp.Compiler.Tastops
-open Microsoft.FSharp.Compiler.TcGlobals
+open FSharp.Compiler 
+open FSharp.Compiler.AccessibilityLogic
+open FSharp.Compiler.Ast
+open FSharp.Compiler.AttributeChecking
+open FSharp.Compiler.ErrorLogger
+open FSharp.Compiler.Infos
+open FSharp.Compiler.Range
+open FSharp.Compiler.Tast
+open FSharp.Compiler.Tastops
+open FSharp.Compiler.TcGlobals
 
 /// Use the given function to select some of the member values from the members of an F# type
 let private SelectImmediateMemberVals g optFilter f (tcref:TyconRef) = 
@@ -81,8 +81,8 @@ let rec GetImmediateIntrinsicMethInfosOfTypeAux (optFilter,ad) g amap m origTy m
                   |> List.filter (fun minfo -> not minfo.IsInstance)
             else
                 match tryDestAppTy g metadataTy with
-                | None -> []
-                | Some tcref ->
+                | ValueNone -> []
+                | ValueSome tcref ->
                     SelectImmediateMemberVals g optFilter (TrySelectMemberVal g optFilter origTy None) tcref
     let minfos = minfos |> List.filter (IsMethInfoAccessible amap m ad)
     minfos
@@ -169,8 +169,8 @@ let rec GetImmediateIntrinsicPropInfosOfTypeAux (optFilter,ad) g amap m origTy m
                 GetImmediateIntrinsicPropInfosOfTypeAux (optFilter,ad) g amap m origTy betterMetadataTy
             else
                 match tryDestAppTy g metadataTy with
-                | None -> []
-                | Some tcref ->
+                | ValueNone -> []
+                | ValueSome tcref ->
                     let propCollector = new PropertyCollector(g, amap, m, origTy, optFilter, ad)
                     SelectImmediateMemberVals g None (fun membInfo vref -> propCollector.Collect(membInfo, vref); None) tcref |> ignore
                     propCollector.Close()
@@ -188,11 +188,11 @@ let IsIndexerType g amap ty =
     isArray1DTy g ty ||
     isListTy g ty ||
     match tryDestAppTy g ty with
-    | Some tcref ->
+    | ValueSome tcref ->
         let _, entityTy = generalizeTyconRef tcref
         let props = GetImmediateIntrinsicPropInfosOfType (None, AccessibleFromSomeFSharpCode) g amap range0 entityTy
         props |> List.exists (fun x -> x.PropertyName = "Item")
-    | None -> false
+    | ValueNone -> false
 
 
 /// Sets of methods up the hierarchy, ignoring duplicates by name and sig.
@@ -268,8 +268,8 @@ type InfoReader(g: TcGlobals, amap: Import.ImportMap) =
     /// Get the F#-declared record fields or class 'val' fields of a type
     let GetImmediateIntrinsicRecdOrClassFieldsOfType (optFilter, _ad) _m ty =
         match tryDestAppTy g ty with 
-        | None -> []
-        | Some tcref -> 
+        | ValueNone -> []
+        | ValueSome tcref -> 
             // Note;secret fields are not allowed in lookups here, as we're only looking
             // up user-visible fields in name resolution.
             match optFilter with
@@ -417,17 +417,17 @@ type InfoReader(g: TcGlobals, amap: Import.ImportMap) =
     /// Try and find a record or class field for a type.
     member x.TryFindRecdOrClassFieldInfoOfType (nm,m,ty) =
         match recdOrClassFieldInfoCache.Apply((Some nm,AccessibleFromSomewhere),m,ty) with
-        | [] -> None
-        | [single] -> Some single
+        | [] -> ValueNone
+        | [single] -> ValueSome single
         | flds ->
             // multiple fields with the same name can come from different classes,
             // so filter them by the given type name
             match tryDestAppTy g ty with 
-            | None -> None
-            | Some tcref ->
+            | ValueNone -> ValueNone
+            | ValueSome tcref ->
                 match flds |> List.filter (fun rfinfo -> tyconRefEq g tcref rfinfo.TyconRef) with
-                | [] -> None
-                | [single] -> Some single
+                | [] -> ValueNone
+                | [single] -> ValueSome single
                 | _ -> failwith "unexpected multiple fields with same name" // Because it should have been already reported as duplicate fields
 
     /// Try and find an item with the given name in a type.
@@ -469,8 +469,8 @@ let rec GetIntrinsicConstructorInfosOfTypeAux (infoReader:InfoReader) m origTy m
             GetIntrinsicConstructorInfosOfTypeAux infoReader m origTy betterMetadataTy
         else
             match tryDestAppTy g metadataTy with
-            | None -> []
-            | Some tcref -> 
+            | ValueNone -> []
+            | ValueSome tcref -> 
                 tcref.MembersOfFSharpTyconByName 
                 |> NameMultiMap.find ".ctor"
                 |> List.choose(fun vref -> 
@@ -624,11 +624,25 @@ let private FilterOverrides findFlag (isVirt:'a->bool,isNewSlot,isDefiniteOverri
     
 /// Filter the overrides of methods, either keeping the overrides or keeping the dispatch slots.
 let private FilterOverridesOfMethInfos findFlag g amap m minfos = 
-    FilterOverrides findFlag ((fun (minfo:MethInfo) -> minfo.IsVirtual),(fun minfo -> minfo.IsNewSlot),(fun minfo -> minfo.IsDefiniteFSharpOverride),(fun minfo -> minfo.IsFinal),MethInfosEquivByNameAndSig EraseNone true g amap m,(fun minfo -> minfo.LogicalName)) minfos
+    minfos 
+    |> FilterOverrides findFlag 
+        ((fun (minfo:MethInfo) -> minfo.IsVirtual),
+         (fun minfo -> minfo.IsNewSlot),
+         (fun minfo -> minfo.IsDefiniteFSharpOverride),
+         (fun minfo -> minfo.IsFinal),
+         MethInfosEquivByNameAndSig EraseNone true g amap m,
+         (fun minfo -> minfo.LogicalName)) 
 
 /// Filter the overrides of properties, either keeping the overrides or keeping the dispatch slots.
 let private FilterOverridesOfPropInfos findFlag g amap m props = 
-    FilterOverrides findFlag ((fun (pinfo:PropInfo) -> pinfo.IsVirtualProperty),(fun pinfo -> pinfo.IsNewSlot),(fun pinfo -> pinfo.IsDefiniteFSharpOverride),(fun _ -> false),PropInfosEquivByNameAndSig EraseNone g amap m, (fun pinfo -> pinfo.PropertyName)) props
+    props 
+    |> FilterOverrides findFlag 
+          ((fun (pinfo:PropInfo) -> pinfo.IsVirtualProperty),
+           (fun pinfo -> pinfo.IsNewSlot),
+           (fun pinfo -> pinfo.IsDefiniteFSharpOverride),
+           (fun _ -> false),
+           PropInfosEquivByNameAndSig EraseNone g amap m, 
+           (fun pinfo -> pinfo.PropertyName)) 
 
 /// Exclude methods from super types which have the same signature as a method in a more specific type.
 let ExcludeHiddenOfMethInfos g amap m (minfos:MethInfo list list) = 
