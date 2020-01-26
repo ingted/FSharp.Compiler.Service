@@ -57,13 +57,13 @@ type TempFile(ext, contents) =
 
 let getBackgroundParseResultsForScriptText (input) = 
     use file =  new TempFile("fsx", input)
-    let checkOptions, _diagnostics = checker.GetProjectOptionsFromScript(file.Name, input) |> Async.RunSynchronously
+    let checkOptions, _diagnostics = checker.GetProjectOptionsFromScript(file.Name, FSharp.Compiler.Text.SourceText.ofString input) |> Async.RunSynchronously
     checker.GetBackgroundParseResultsForFileInProject(file.Name, checkOptions)  |> Async.RunSynchronously
 
 
 let getBackgroundCheckResultsForScriptText (input) = 
     use file =  new TempFile("fsx", input)
-    let checkOptions, _diagnostics = checker.GetProjectOptionsFromScript(file.Name, input) |> Async.RunSynchronously
+    let checkOptions, _diagnostics = checker.GetProjectOptionsFromScript(file.Name, FSharp.Compiler.Text.SourceText.ofString input) |> Async.RunSynchronously
     checker.GetBackgroundCheckResultsForFileInProject(file.Name, checkOptions) |> Async.RunSynchronously
 
 
@@ -159,32 +159,15 @@ let mkTestFileAndOptions source additionalArgs =
     let project = Path.GetTempFileName()
     let dllName = Path.ChangeExtension(project, ".dll")
     let projFileName = Path.ChangeExtension(project, ".fsproj")
-    File.WriteAllText(fileName, source)
+    let fileSource1 = "module M"
+    File.WriteAllText(fileName, fileSource1)
 
     let args = Array.append (mkProjectCommandLineArgs (dllName, [fileName])) additionalArgs
     let options = checker.GetProjectOptionsFromCommandLineArgs (projFileName, args)
     fileName, options
 
-let getProjectReferences (content, dllFiles) = 
-    let fileName, options = 
-      mkTestFileAndOptions content 
-       [| for dllFile in dllFiles do
-            yield "-r:"+dllFile |]
-    let results = checker.ParseAndCheckProject(options) |> Async.RunSynchronously
-    if results.HasCriticalErrors then
-        let builder = new System.Text.StringBuilder()
-        for err in results.Errors do
-            builder.AppendLine(sprintf "**** %s: %s" (if err.Severity = FSharpErrorSeverity.Error then "error" else "warning") err.Message)
-            |> ignore
-        failwith (builder.ToString())
-    let assemblies =
-        results.ProjectContext.GetReferencedAssemblies()
-        |> List.map(fun x -> x.SimpleName, x)
-        |> dict
-    results, assemblies
-
 let parseAndCheckFile fileName source options =
-    match checker.ParseAndCheckFileInProject(fileName, 0, source, options) |> Async.RunSynchronously with
+    match checker.ParseAndCheckFileInProject(fileName, 0, FSharp.Compiler.Text.SourceText.ofString source, options) |> Async.RunSynchronously with
     | parseResults, FSharpCheckFileAnswer.Succeeded(checkResults) -> parseResults, checkResults
     | _ -> failwithf "Parsing aborted unexpectedly..."
 
@@ -198,11 +181,11 @@ let parseAndCheckScript (file, input) =
     let projectOptions = checker.GetProjectOptionsFromCommandLineArgs (projName, args)
 
 #else    
-    let projectOptions, _diagnostics = checker.GetProjectOptionsFromScript(file, input) |> Async.RunSynchronously
+    let projectOptions, _diagnostics = checker.GetProjectOptionsFromScript(file, FSharp.Compiler.Text.SourceText.ofString input) |> Async.RunSynchronously
     printfn "projectOptions = %A" projectOptions
 #endif
 
-    let parseResult, typedRes = checker.ParseAndCheckFileInProject(file, 0, input, projectOptions) |> Async.RunSynchronously
+    let parseResult, typedRes = checker.ParseAndCheckFileInProject(file, 0, FSharp.Compiler.Text.SourceText.ofString input, projectOptions) |> Async.RunSynchronously
     
     // if parseResult.Errors.Length > 0 then
     //     printfn "---> Parse Input = %A" input
@@ -212,18 +195,16 @@ let parseAndCheckScript (file, input) =
     | FSharpCheckFileAnswer.Succeeded(res) -> parseResult, res
     | res -> failwithf "Parsing did not finish... (%A)" res
 
-let parseSource (source: string) =
-    let location = Path.GetTempFileName()
-    let filePath = Path.Combine(location, ".fs")
-    let dllPath = Path.Combine(location, ".dll")
-
+let parseSourceCode (name: string, code: string) =
+    let location = Path.Combine(Path.GetTempPath(),"test"+string(hash (name, code)))
+    try Directory.CreateDirectory(location) |> ignore with _ -> ()
+    let projPath = Path.Combine(location, name + ".fsproj")
+    let filePath = Path.Combine(location, name + ".fs")
+    let dllPath = Path.Combine(location, name + ".dll")
     let args = mkProjectCommandLineArgs(dllPath, [filePath])
     let options, errors = checker.GetParsingOptionsFromCommandLineArgs(List.ofArray args)
-    let parseResults = checker.ParseFile(filePath, source, options) |> Async.RunSynchronously
-
-    match parseResults.ParseTree with
-    | Some parseTree -> parseTree
-    | None -> failwithf "Expected there to be a parse tree for source:\n%s" source
+    let parseResults = checker.ParseFile(filePath, FSharp.Compiler.Text.SourceText.ofString code, options) |> Async.RunSynchronously
+    parseResults.ParseTree
 
 /// Extract range info 
 let tups (m:Range.range) = (m.StartLine, m.StartColumn), (m.EndLine, m.EndColumn)
