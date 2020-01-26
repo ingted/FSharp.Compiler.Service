@@ -10,12 +10,15 @@ open Internal.Utilities
 open FSharp.Compiler.AbstractIL
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryReader
+open FSharp.Compiler.AbstractIL.ILPdbWriter
+open FSharp.Compiler.AbstractIL.Internal
 open FSharp.Compiler.AbstractIL.Internal.Library
 open FSharp.Compiler
 open FSharp.Compiler.TypeChecker
 open FSharp.Compiler.Range
 open FSharp.Compiler.Ast
 open FSharp.Compiler.ErrorLogger
+open FSharp.Compiler.Features
 open FSharp.Compiler.Tast
 open FSharp.Compiler.TcGlobals
 open FSharp.Compiler.Text
@@ -61,7 +64,7 @@ val ComputeQualifiedNameOfFileFromUniquePath: range * string list -> Ast.Qualifi
 
 val PrependPathToInput: Ast.Ident list -> Ast.ParsedInput -> Ast.ParsedInput
 
-/// State used to de-deuplicate module names along a list of file names
+/// State used to de-deduplicate module names along a list of file names
 type ModuleNamesDict = Map<string,Map<string,QualifiedNameOfFile>>
 
 /// Checks if a ParsedInput is using a module name that was already given and deduplicates the name if needed.
@@ -152,9 +155,9 @@ type IRawFSharpAssemblyData =
     abstract HasAnyFSharpSignatureDataAttribute: bool
     abstract HasMatchingFSharpSignatureDataAttribute: ILGlobals -> bool
     ///  The raw F# signature data in the assembly, if any
-    abstract GetRawFSharpSignatureData: range * ilShortAssemName: string * fileName: string -> (string * (unit -> byte[])) list
+    abstract GetRawFSharpSignatureData: range * ilShortAssemName: string * fileName: string -> (string * (unit -> ReadOnlyByteMemory)) list
     ///  The raw F# optimization data in the assembly, if any
-    abstract GetRawFSharpOptimizationData: range * ilShortAssemName: string * fileName: string -> (string * (unit -> byte[])) list
+    abstract GetRawFSharpOptimizationData: range * ilShortAssemName: string * fileName: string -> (string * (unit -> ReadOnlyByteMemory)) list
     ///  The table of type forwarders in the assembly
     abstract GetRawTypeForwarders: unit -> ILExportedTypesAndForwarders
     /// The identity of the module
@@ -201,13 +204,21 @@ type AssemblyResolution =
        /// Whether or not this is an installed system assembly (for example, System.dll)
        sysdir: bool
        // Lazily populated ilAssemblyRef for this reference. 
-       ilAssemblyRef: ILAssemblyRef option ref  }
+       mutable ilAssemblyRef: ILAssemblyRef option }
 
 type UnresolvedAssemblyReference = UnresolvedAssemblyReference of string * AssemblyReference list
 
 #if !NO_EXTENSIONTYPING
 type ResolvedExtensionReference = ResolvedExtensionReference of string * AssemblyReference list * Tainted<ITypeProvider> list
 #endif
+
+/// The thread in which compilation calls will be enqueued and done work on.
+/// Note: This is currently only used when disposing of type providers and will be extended to all the other type provider calls when compilations can be done in parallel.
+///       Right now all calls in FCS to type providers are single-threaded through use of the reactor thread. 
+type ICompilationThread =
+
+    /// Enqueue work to be done on a compilation thread.
+    abstract EnqueueWork: (CompilationThreadToken -> unit) -> unit
 
 [<RequireQualifiedAccess>]
 type CompilerTarget = 
@@ -240,16 +251,12 @@ type VersionFlag =
 [<NoEquality; NoComparison>]
 type TcConfigBuilder =
     { mutable primaryAssembly: PrimaryAssembly
-      mutable autoResolveOpenDirectivesToDlls: bool
       mutable noFeedback: bool
       mutable stackReserveSize: int32 option
       mutable implicitIncludeDir: string
       mutable openDebugInformationForLaterStaticLinking: bool
       defaultFSharpBinariesDir: string
       mutable compilingFslib: bool
-      mutable compilingFslib20: string option
-      mutable compilingFslib40: bool
-      mutable compilingFslibNoBigInt: bool
       mutable useIncrementalBuilder: bool
       mutable includes: string list
       mutable implicitOpens: string list
@@ -261,9 +268,11 @@ type TcConfigBuilder =
       mutable light: bool option
       mutable conditionalCompilationDefines: string list
       /// Sources added into the build with #load
-      mutable loadedSources: (range * string) list
-      
+      mutable loadedSources: (range * string * string) list
+      mutable compilerToolPaths: string  list
       mutable referencedDLLs: AssemblyReference  list
+      mutable packageManagerLines: Map<string, (bool * string * range) list>
+
       mutable projectReferences: IProjectReference list
       mutable knownUnresolvedReferences: UnresolvedAssemblyReference list
       reduceMemoryUsage: ReduceMemoryFlag
@@ -275,6 +284,7 @@ type TcConfigBuilder =
       mutable mlCompatibility:bool
       mutable checkOverflow:bool
       mutable showReferenceResolutions:bool
+      mutable outputDir: string option
       mutable outputFile: string option
       mutable platform: ILPlatform option
       mutable prefer32Bit: bool
@@ -329,6 +339,7 @@ type TcConfigBuilder =
       mutable maxErrors: int
       mutable abortOnError: bool
       mutable baseAddress: int32 option
+      mutable checksumAlgorithm: HashAlgorithm
  #if DEBUG
       mutable showOptimizationData: bool
 #endif
@@ -351,6 +362,7 @@ type TcConfigBuilder =
 #if !NO_EXTENSIONTYPING
       mutable showExtensionTypeMessages: bool
 #endif
+      mutable compilationThread: ICompilationThread
       mutable pause: bool 
       mutable alwaysCallVirt: bool
       mutable noDebugData: bool
@@ -375,6 +387,10 @@ type TcConfigBuilder =
       mutable noConditionalErasure: bool
 
       mutable pathMap : PathMap
+
+      mutable langVersion : LanguageVersion
+
+      mutable includePathAdded : string -> unit
     }
 
     static member Initial: TcConfigBuilder
@@ -387,13 +403,15 @@ type TcConfigBuilder =
         isInteractive: bool * 
         isInvalidationSupported: bool *
         defaultCopyFSharpCore: CopyFSharpCoreFlag *
-        tryGetMetadataSnapshot: ILReaderTryGetMetadataSnapshot 
+        tryGetMetadataSnapshot: ILReaderTryGetMetadataSnapshot *
+        ?includePathAdded: (string -> unit)
           -> TcConfigBuilder
 
     member DecideNames: string list -> outfile: string * pdbfile: string option * assemblyName: string 
     member TurnWarningOff: range * string -> unit
     member TurnWarningOn: range * string -> unit
     member AddIncludePath: range * string * string -> unit
+    member AddCompilerToolsByPath: string -> unit
     member AddReferencedAssemblyByPath: range * string -> unit
     member RemoveReferencedAssemblyByPath: range * string -> unit
     member AddEmbeddedSourceFile: string -> unit
@@ -406,16 +424,12 @@ type TcConfigBuilder =
 // Immutable TcConfig
 type TcConfig =
     member primaryAssembly: PrimaryAssembly
-    member autoResolveOpenDirectivesToDlls: bool
     member noFeedback: bool
     member stackReserveSize: int32 option
     member implicitIncludeDir: string
     member openDebugInformationForLaterStaticLinking: bool
     member fsharpBinariesDir: string
     member compilingFslib: bool
-    member compilingFslib20: string option
-    member compilingFslib40: bool
-    member compilingFslibNoBigInt: bool
     member useIncrementalBuilder: bool
     member includes: string list
     member implicitOpens: string list
@@ -427,6 +441,7 @@ type TcConfig =
     member conditionalCompilationDefines: string list
     member subsystemVersion: int * int
     member useHighEntropyVA: bool
+    member compilerToolPaths: string list
     member referencedDLLs: AssemblyReference list
     member reduceMemoryUsage: ReduceMemoryFlag
     member inputCodePage: int option
@@ -435,6 +450,7 @@ type TcConfig =
     member mlCompatibility:bool
     member checkOverflow:bool
     member showReferenceResolutions:bool
+    member outputDir: string option
     member outputFile: string option
     member platform: ILPlatform option
     member prefer32Bit: bool
@@ -488,6 +504,7 @@ type TcConfig =
 
     member maxErrors: int
     member baseAddress: int32 option
+    member checksumAlgorithm: HashAlgorithm
 #if DEBUG
     member showOptimizationData: bool
 #endif
@@ -510,6 +527,7 @@ type TcConfig =
 #if !NO_EXTENSIONTYPING
     member showExtensionTypeMessages: bool
 #endif
+    member compilationThread: ICompilationThread
     member pause: bool 
     member alwaysCallVirt: bool
     member noDebugData: bool
@@ -536,6 +554,7 @@ type TcConfig =
     member copyFSharpCore: CopyFSharpCoreFlag
     member shadowCopyReferences: bool
     member useSdkRefs: bool
+    member langVersion: LanguageVersion
 
     static member Create: TcConfigBuilder * validate: bool -> TcConfig
 
@@ -591,6 +610,8 @@ type TcAssemblyResolutions =
     static member BuildFromPriorResolutions    : CompilationThreadToken * TcConfig * AssemblyResolution list * UnresolvedAssemblyReference list -> TcAssemblyResolutions 
 
 /// Represents a table of imported assemblies with their resolutions.
+/// Is a disposable object, but it is recommended not to explicitly call Dispose unless you absolutely know nothing will be using its contents after the disposal.
+/// Otherwise, simply allow the GC to collect this and it will properly call Dispose from the finalizer.
 [<Sealed>] 
 type TcImports =
     interface System.IDisposable
@@ -663,11 +684,11 @@ val WriteOptimizationData: TcGlobals * filename: string * inMem: bool * CcuThunk
 
 /// Process #r in F# Interactive.
 /// Adds the reference to the tcImports and add the ccu to the type checking environment.
-val RequireDLL: CompilationThreadToken * TcImports * TcEnv * thisAssemblyName: string * referenceRange: range * file: string -> TcEnv * (ImportedBinary list * ImportedAssembly list)
+val RequireDLL: CompilationThreadToken * TcImports * TcEnv * thisAssemblyName: string * referenceRange: range * file: string * assemblyReferenceAdded: (string -> unit) -> TcEnv * (ImportedBinary list * ImportedAssembly list)
 
 /// Processing # commands
-val ProcessMetaCommandsFromInput: 
-    (('T -> range * string -> 'T) * ('T -> range * string -> 'T) * ('T -> range * string -> unit)) 
+val ProcessMetaCommandsFromInput : 
+    (('T -> range * string -> 'T) * ('T -> range * string -> 'T) * ('T -> DependencyManagerIntegration.IDependencyManagerProvider * range * string -> 'T) * ('T -> range * string -> unit)) 
     -> TcConfigBuilder * Ast.ParsedInput * string * 'T 
     -> 'T
 
@@ -788,7 +809,7 @@ type LoadClosure =
       Inputs: LoadClosureInput list
 
       /// The original #load references, including those that didn't resolve
-      OriginalLoadReferences: (range * string) list
+      OriginalLoadReferences: (range * string * string) list
 
       /// The #nowarns
       NoWarns: (string * range list) list

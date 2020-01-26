@@ -15,7 +15,7 @@ type FSharpTokenizerLexState =
     static member Initial : FSharpTokenizerLexState
     member Equals : FSharpTokenizerLexState -> bool
 
-/// Represents stable information for the state of the laxing engine at the end of a line
+/// Represents stable information for the state of the lexing engine at the end of a line
 type FSharpTokenizerColorState =
     | Token = 1
     | IfDefSkip = 3
@@ -32,7 +32,7 @@ type FSharpTokenizerColorState =
     | TripleQuoteStringInComment = 14
     | InitialState = 0 
     
-/// Gives an indicattion of the color class to assign to the token an IDE
+/// Gives an indication of the color class to assign to the token an IDE
 type FSharpTokenColorKind =
     | Default = 0
     | Text = 0
@@ -133,6 +133,8 @@ module FSharpTokenTag =
     /// Indicates the token is a `..`
     val DOT_DOT : int
     /// Indicates the token is a `..`
+    val DOT_DOT_HAT : int
+    /// Indicates the token is a `..^`
     val INT32_DOT_DOT : int
     /// Indicates the token is a `..`
     val UNDERSCORE : int
@@ -243,6 +245,9 @@ module internal TestExpose =
     val TokenInfo : Parser.token -> (FSharpTokenColorKind * FSharpTokenCharKind * FSharpTokenTriggerClass)
 
 module Keywords =
+    /// Checks if adding backticks to identifier is needed.
+    val DoesIdentifierNeedQuotation : string -> bool
+
     /// Add backticks if the identifier is a keyword.
     val QuoteIdentifierIfNeeded : string -> string
 

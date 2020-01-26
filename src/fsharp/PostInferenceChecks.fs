@@ -93,7 +93,10 @@ type env =
       returnScope : int 
       
       /// Are we in an app expression (Expr.App)?
-      isInAppExpr: bool } 
+      isInAppExpr: bool
+    } 
+
+    override __.ToString() = "<env>"
 
 let BindTypar env (tp: Typar) = 
     { env with 
@@ -183,22 +186,38 @@ let CombineLimits limits =
 
 type cenv = 
     { boundVals: Dictionary<Stamp, int> // really a hash set
+
       limitVals: Dictionary<Stamp, Limit>
+
       mutable potentialUnboundUsesOfVals: StampMap<range> 
+
       mutable anonRecdTypes: StampMap<AnonRecdTypeInfo> 
+
       g: TcGlobals 
+
       amap: Import.ImportMap 
+
       /// For reading metadata
       infoReader: InfoReader
+
       internalsVisibleToPaths : CompilationPath list
+
       denv: DisplayEnv 
+
       viewCcu : CcuThunk
+
       reportErrors: bool
+
       isLastCompiland : bool*bool
+
       isInternalTestSpanStackReferring: bool
+
       // outputs
       mutable usesQuotations : bool
+
       mutable entryPointGiven: bool  }
+
+    override x.ToString() = "<cenv>"
 
 /// Check if the value is an argument of a function
 let IsValArgument env (v: Val) =
@@ -263,7 +282,8 @@ let GetLimitValByRef cenv env m v =
     { scope = scope; flags = flags }
 
 let LimitVal cenv (v: Val) limit = 
-    cenv.limitVals.[v.Stamp] <- limit
+    if not v.IgnoresByrefScope then
+        cenv.limitVals.[v.Stamp] <- limit
 
 let BindVal cenv env (v: Val) = 
     //printfn "binding %s..." v.DisplayName
@@ -293,7 +313,7 @@ let RecordAnonRecdInfo cenv (anonInfo: AnonRecdTypeInfo) =
 // approx walk of type
 //--------------------------------------------------------------------------
 
-let rec CheckTypeDeep (cenv: cenv) ((visitTy, visitTyconRefOpt, visitAppTyOpt, visitTraitSolutionOpt, visitTyparOpt) as f) g env isInner ty =
+let rec CheckTypeDeep (cenv: cenv) ((visitTy, visitTyconRefOpt, visitAppTyOpt, visitTraitSolutionOpt, visitTyparOpt) as f) (g: TcGlobals) env isInner ty =
     // We iterate the _solved_ constraints as well, to pick up any record of trait constraint solutions
     // This means we walk _all_ the constraints _everywhere_ in a type, including
     // those attached to _solved_ type variables. This is used by PostTypeCheckSemanticChecks to detect uses of
@@ -302,17 +322,24 @@ let rec CheckTypeDeep (cenv: cenv) ((visitTy, visitTyconRefOpt, visitAppTyOpt, v
     // In an ideal world we would, instead, record the solutions to these constraints as "witness variables" in expressions, 
     // rather than solely in types. 
     match ty with 
-    | TType_var tp  when tp.Solution.IsSome  -> 
-        tp.Constraints |> List.iter (fun cx -> 
+    | TType_var tp when tp.Solution.IsSome ->
+        for cx in tp.Constraints do
             match cx with 
             | TyparConstraint.MayResolveMember((TTrait(_, _, _, _, _, soln)), _) -> 
                  match visitTraitSolutionOpt, !soln with 
                  | Some visitTraitSolution, Some sln -> visitTraitSolution sln
                  | _ -> ()
-            | _ -> ())
+            | _ -> ()
     | _ -> ()
     
-    let ty = stripTyparEqns ty 
+    let ty =
+        if g.compilingFslib then
+            match stripTyparEqns ty with
+            // When compiling FSharp.Core, do not strip type equations at this point if we can't dereference a tycon.
+            | TType_app (tcref, _) when not tcref.CanDeref -> ty
+            | _ -> stripTyEqns g ty
+        else 
+            stripTyEqns g ty
     visitTy ty
 
     match ty with
@@ -352,10 +379,12 @@ let rec CheckTypeDeep (cenv: cenv) ((visitTy, visitTyconRefOpt, visitAppTyOpt, v
                     visitTyar (env, tp)
 
 and CheckTypesDeep cenv f g env tys = 
-    tys |> List.iter (CheckTypeDeep cenv f g env true)
+    for ty in tys do
+        CheckTypeDeep cenv f g env true ty
 
 and CheckTypesDeepNoInner cenv f g env tys = 
-    tys |> List.iter (CheckTypeDeep cenv f g env false)
+    for ty in tys do
+        CheckTypeDeep cenv f g env false ty
 
 and CheckTypeConstraintDeep cenv f g env x =
      match x with 
@@ -541,7 +570,7 @@ let mkArgsForAppliedVal isBaseCall (vref: ValRef) argsl =
     | Some topValInfo -> 
         let argArities = topValInfo.AritiesOfArgs
         let argArities = if isBaseCall && argArities.Length >= 1 then List.tail argArities else argArities
-        // Check for partial applications: arguments to partial applciations don't get to use byrefs
+        // Check for partial applications: arguments to partial applications don't get to use byrefs
         if List.length argsl >= argArities.Length then 
             List.map mkArgsPermit argArities
         else
@@ -620,7 +649,7 @@ let CheckTypePermitSpanLike (cenv: cenv) env m ty = CheckType PermitByRefType.Sp
 /// Check types occurring in TAST but allow all byrefs.  Only used on internally-generated types
 let CheckTypePermitAllByrefs (cenv: cenv) env m ty = CheckType PermitByRefType.All cenv env m ty
 
-/// Check types ocurring in TAST but disallow inner types to be byref or byref-like types.
+/// Check types occurring in TAST but disallow inner types to be byref or byref-like types.
 let CheckTypeNoInnerByrefs cenv env m ty = CheckType PermitByRefType.NoInnerByRefLike cenv env m ty
 
 let CheckTypeInstNoByrefs cenv env m tyargs =
@@ -678,6 +707,7 @@ and CheckValRef (cenv: cenv) (env: env) v m (context: PermitByRefExpr) =
         if isSpliceOperator cenv.g v then errorR(Error(FSComp.SR.chkNoFirstClassSplicing(), m))
         if valRefEq cenv.g v cenv.g.addrof_vref  then errorR(Error(FSComp.SR.chkNoFirstClassAddressOf(), m))
         if valRefEq cenv.g v cenv.g.reraise_vref then errorR(Error(FSComp.SR.chkNoFirstClassRethrow(), m))
+        if valRefEq cenv.g v cenv.g.nameof_vref then errorR(Error(FSComp.SR.chkNoFirstClassNameOf(), m))
 
         // ByRefLike-typed values can only occur in permitting contexts 
         if context.Disallow && isByrefLikeTy cenv.g m v.Type then 
@@ -803,7 +833,7 @@ and CheckCallLimitArgs cenv env m returnTy limitArgs (context: PermitByRefExpr) 
                 errorR(Error(FSComp.SR.chkNoByrefAddressOfValueFromExpression(), m))
 
         // You cannot call a function that takes a byref of a span-like (not stack referring) and 
-        //     either a stack referring spanlike or a local-byref of a stack referring span-like.
+        //     either a stack referring span-like or a local-byref of a stack referring span-like.
         let isCallLimited =  
             HasLimitFlag LimitFlags.ByRefOfSpanLike limitArgs && 
             (HasLimitFlag LimitFlags.StackReferringSpanLike limitArgs || 
@@ -1118,7 +1148,7 @@ and CheckExprOp cenv env (op, tyargs, args, m) context expr =
     let ctorLimitedZoneCheck() = 
         if env.ctorLimitedZone then errorR(Error(FSComp.SR.chkObjCtorsCantUseExceptionHandling(), m))
 
-    // Ensure anonynous record type requirements are recorded
+    // Ensure anonymous record type requirements are recorded
     match op with
     | TOp.AnonRecdGet (anonInfo, _) 
     | TOp.AnonRecd anonInfo -> 
@@ -1297,7 +1327,7 @@ and CheckExprOp cenv env (op, tyargs, args, m) context expr =
 
         // C# applies a rule where the APIs to struct types can't return the addresses of fields in that struct.
         // There seems no particular reason for this given that other protections in the language, though allowing
-        // it would mean "readonly" on a struct doesn't imply immutabality-of-contents - it only implies 
+        // it would mean "readonly" on a struct doesn't imply immutability-of-contents - it only implies 
         if context.PermitOnlyReturnable && (match obj with Expr.Val (vref, _, _) -> vref.BaseOrThisInfo = MemberThisVal | _ -> false) && isByrefTy g (tyOfExpr g obj) then
             errorR(Error(FSComp.SR.chkStructsMayNotReturnAddressesOfContents(), m))
 
@@ -1896,8 +1926,8 @@ let CheckRecdField isUnion cenv env (tycon: Tycon) (rfield: RecdField) =
     let m = rfield.Range
     let fieldTy = stripTyEqns cenv.g rfield.FormalType
     let isHidden = 
-        IsHiddenTycon cenv.g env.sigToImplRemapInfo tycon || 
-        IsHiddenTyconRepr cenv.g env.sigToImplRemapInfo tycon || 
+        IsHiddenTycon env.sigToImplRemapInfo tycon || 
+        IsHiddenTyconRepr env.sigToImplRemapInfo tycon || 
         (not isUnion && IsHiddenRecdField env.sigToImplRemapInfo (tcref.MakeNestedRecdFieldRef rfield))
     let access = AdjustAccess isHidden (fun () -> tycon.CompilationPath) rfield.Accessibility
     CheckTypeForAccess cenv env (fun () -> rfield.Name) access m fieldTy
@@ -2159,7 +2189,7 @@ let CheckEntityDefn cenv env (tycon: Entity) =
             uc.RecdFieldsArray |> Array.iter (CheckRecdField true cenv env tycon))
 
     // Access checks
-    let access =  AdjustAccess (IsHiddenTycon g env.sigToImplRemapInfo tycon) (fun () -> tycon.CompilationPath) tycon.Accessibility
+    let access =  AdjustAccess (IsHiddenTycon env.sigToImplRemapInfo tycon) (fun () -> tycon.CompilationPath) tycon.Accessibility
     let visitType ty = CheckTypeForAccess cenv env (fun () -> tycon.DisplayNameWithStaticParametersAndUnderscoreTypars) access tycon.Range ty    
 
     abstractSlotValsOfTycons [tycon] |> List.iter (typeOfVal >> visitType) 

@@ -32,8 +32,8 @@ module internal PrintUtilities =
     let bracketIfL x lyt = if x then bracketL lyt else lyt
     let squareAngleL x = LeftL.leftBracketAngle ^^ x ^^ RightL.rightBracketAngle
     let angleL x = sepL Literals.leftAngle ^^ x ^^ rightL Literals.rightAngle
-    let braceL x = leftL Literals.leftBrace ^^ x ^^ rightL Literals.rightBrace
-    let braceBarL x = leftL Literals.leftBraceBar ^^ x ^^ rightL Literals.rightBraceBar
+    let braceL x = wordL Literals.leftBrace ^^ x ^^ wordL Literals.rightBrace
+    let braceBarL x = wordL Literals.leftBraceBar ^^ x ^^ wordL Literals.rightBraceBar
 
     let comment str = wordL (tagText (sprintf "(* %s *)" str))
 
@@ -47,10 +47,10 @@ module internal PrintUtilities =
         isEnumTy g ty || isDelegateTy g ty || ExistsHeadTypeInEntireHierarchy g amap m ty g.exn_tcr || ExistsHeadTypeInEntireHierarchy g amap m ty g.tcref_System_Attribute 
 
 
-    let applyMaxMembers maxMembers (alldecls: _ list) = 
+    let applyMaxMembers maxMembers (allDecls: _ list) = 
         match maxMembers with 
-        | Some n when alldecls.Length > n -> (alldecls |> List.truncate n) @ [wordL (tagPunctuation "...")] 
-        | _ -> alldecls
+        | Some n when allDecls.Length > n -> (allDecls |> List.truncate n) @ [wordL (tagPunctuation "...")] 
+        | _ -> allDecls
 
     /// fix up a name coming from IL metadata by quoting "funny" names (keywords, otherwise invalid identifiers)
     let adjustILName n =
@@ -185,12 +185,12 @@ module private PrintIL =
         | ILType.Modified (_, _, t) -> layoutILType denv ilTyparSubst t // Just recurse through them to the contained ILType
 
     /// Layout a function pointer signature using type-only-F#-style. No argument names are printed.
-    and private layoutILCallingSignature denv ilTyparSubst cons (signatur: ILCallingSignature) =
+    and private layoutILCallingSignature denv ilTyparSubst cons (signature: ILCallingSignature) =
         // We need a special case for
         // constructors (Their return types are reported as `void`, but this is
         // incorrect; so if we're dealing with a constructor we require that the
         // return type be passed along as the `cons` parameter.)
-        let args = signatur.ArgTypes |> List.map (layoutILType denv ilTyparSubst) 
+        let args = signature.ArgTypes |> List.map (layoutILType denv ilTyparSubst) 
         let res = 
             match cons with
             | Some className -> 
@@ -198,7 +198,7 @@ module private PrintIL =
                 // special case for constructor return-type (viz., the class itself)
                 layoutILTypeRefName denv names ^^ (pruneParams className ilTyparSubst |> paramsL) 
             | None -> 
-                signatur.ReturnType |> layoutILType denv ilTyparSubst
+                signature.ReturnType |> layoutILType denv ilTyparSubst
         
         match args with
         | [] -> WordL.structUnit ^^ WordL.arrow ^^ res
@@ -566,7 +566,7 @@ module private PrintTypes =
             | Const.String bs -> "\"" + bs + "\"" |> tagNumericLiteral
             | Const.Unit -> "()" |> tagPunctuation
             | Const.Decimal bs -> string bs + "M" |> tagNumericLiteral
-            // either "null" or "the defaut value for a struct"
+            // either "null" or "the default value for a struct"
             | Const.Zero -> tagKeyword(if isRefTy g ty then "null" else "default")
         wordL str
 
@@ -942,7 +942,7 @@ module private PrintTypes =
 
         // Layout a tuple type 
         | TType_anon (anonInfo, tys) ->
-            let core = sepListL (wordL (tagPunctuation ";")) (List.map2 (fun nm ty -> wordL (tagField nm) ^^ wordL (tagPunctuation ":") ^^ layoutTypeWithInfoAndPrec denv env prec ty) (Array.toList anonInfo.SortedNames) tys)
+            let core = sepListL (rightL (tagPunctuation ";")) (List.map2 (fun nm ty -> wordL (tagField nm) ^^ rightL (tagPunctuation ":") ^^ layoutTypeWithInfoAndPrec denv env prec ty) (Array.toList anonInfo.SortedNames) tys)
             if evalAnonInfoIsStruct anonInfo then 
                 WordL.keywordStruct --- braceBarL core
             else 
@@ -1405,12 +1405,24 @@ module InfoMemberPrinting =
             | None -> tagProperty
             | Some vref -> tagProperty >> mkNav vref.DefinitionRange
         let nameL = DemangleOperatorNameAsLayout tagProp pinfo.PropertyName
+        let getterSetter =
+            match pinfo.HasGetter, pinfo.HasSetter with
+            | (true, false) ->
+                wordL (tagKeyword "with") ^^ wordL (tagText "get")
+            | (false, true) ->
+                wordL (tagKeyword "with") ^^ wordL (tagText "set")
+            | (true, true) ->
+                wordL (tagKeyword "with") ^^ wordL (tagText "get, set")
+            | (false, false) ->
+                emptyL
+
         wordL (tagText (FSComp.SR.typeInfoProperty())) ^^
         layoutTyconRef denv pinfo.ApparentEnclosingTyconRef ^^
         SepL.dot ^^
         nameL ^^
         RightL.colon ^^
-        layoutType denv rty
+        layoutType denv rty ^^
+        getterSetter
 
     let formatMethInfoToBufferFreeStyle amap m denv os (minfo: MethInfo) = 
         let _, resL = prettyLayoutOfMethInfoFreeStyle amap m denv emptyTyparInst minfo 
@@ -1445,7 +1457,7 @@ module private TastDefinitionPrinting =
         let lhs =
             tagRecordField fld.Name
             |> mkNav fld.DefinitionRange
-            |> wordL 
+            |> wordL
         let lhs = (if addAccess then layoutAccessibility denv fld.Accessibility lhs else lhs)
         let lhs = if fld.IsMutable then wordL (tagKeyword "mutable") --- lhs else lhs
         (lhs ^^ RightL.colon) --- layoutType denv fld.FormalType
@@ -1726,8 +1738,15 @@ module private TastDefinitionPrinting =
                   let denv = denv.AddAccessibility tycon.TypeReprAccessibility 
                   match repr with 
                   | TRecdRepr _ ->
-                      let recdFieldRefL fld = layoutRecdField false denv fld ^^ rightL (tagPunctuation ";")
-                      let recdL = tycon.TrueFieldsAsList |> List.map recdFieldRefL |> applyMaxMembers denv.maxMembers |> aboveListL |> braceL
+                      let recdFieldRefL fld = layoutRecdField false denv fld
+
+                      let recdL =
+                          tycon.TrueFieldsAsList
+                          |> List.map recdFieldRefL
+                          |> applyMaxMembers denv.maxMembers
+                          |> aboveListL
+                          |> braceL
+
                       Some (addMembersAsWithEnd (addReprAccessL recdL))
                         
                   | TFSharpObjectRepr r -> 
@@ -1759,8 +1778,7 @@ module private TastDefinitionPrinting =
                                   | _ -> []
                               let vsprs = 
                                   tycon.MembersOfFSharpTyconSorted
-                                  |> List.filter (fun v -> isNil (Option.get v.MemberInfo).ImplementedSlotSigs) 
-                                  |> List.filter (fun v -> v.IsDispatchSlot)
+                                  |> List.filter (fun v -> isNil (Option.get v.MemberInfo).ImplementedSlotSigs && v.IsDispatchSlot) 
                                   |> List.map (fun vref -> PrintTastMemberOrVals.prettyLayoutOfValOrMemberNoInst denv vref.Deref)
                               let staticValsLs = 
                                   tycon.TrueFieldsAsList
@@ -1770,14 +1788,14 @@ module private TastDefinitionPrinting =
                                   tycon.TrueFieldsAsList
                                   |> List.filter (fun f -> not f.IsStatic)
                                   |> List.map (fun f -> WordL.keywordVal ^^ layoutRecdField true denv f)
-                              let alldecls = inherits @ memberImplementLs @ memberCtorLs @ instanceValsLs @ vsprs @ memberInstanceLs @ staticValsLs @ memberStaticLs
-                              if isNil alldecls then
+                              let allDecls = inherits @ memberImplementLs @ memberCtorLs @ instanceValsLs @ vsprs @ memberInstanceLs @ staticValsLs @ memberStaticLs
+                              if isNil allDecls then
                                   None
                               else
-                                  let alldecls = applyMaxMembers denv.maxMembers alldecls
-                                  let emptyMeasure = match tycon.TypeOrMeasureKind with TyparKind.Measure -> isNil alldecls | _ -> false
+                                  let allDecls = applyMaxMembers denv.maxMembers allDecls
+                                  let emptyMeasure = match tycon.TypeOrMeasureKind with TyparKind.Measure -> isNil allDecls | _ -> false
                                   if emptyMeasure then None else 
-                                  let declsL = aboveListL alldecls
+                                  let declsL = aboveListL allDecls
                                   let declsL = match start with Some s -> (wordL s @@-- declsL) @@ wordL (tagKeyword "end") | None -> declsL
                                   Some declsL
                   | TUnionRepr _ -> 

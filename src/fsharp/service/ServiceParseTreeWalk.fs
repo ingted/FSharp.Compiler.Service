@@ -412,6 +412,7 @@ module public AstTraversal =
                      dive synExpr2 synExpr2.Range traverseSynExpr]
                     |> pick expr
                 | SynExpr.Lazy (synExpr, _range) -> traverseSynExpr synExpr
+                | SynExpr.SequentialOrImplicitYield (_sequencePointInfoForSeq, synExpr, synExpr2, _, _range) 
                 | SynExpr.Sequential (_sequencePointInfoForSeq, _, synExpr, synExpr2, _range) -> 
                     [dive synExpr synExpr.Range traverseSynExpr
                      dive synExpr2 synExpr2.Range traverseSynExpr]
@@ -606,8 +607,10 @@ module public AstTraversal =
             match m with
             | SynMemberDefn.Open(_longIdent, _range) -> None
             | SynMemberDefn.Member(synBinding, _range) -> traverseSynBinding path synBinding
-            | SynMemberDefn.ImplicitCtor(_synAccessOption, _synAttributes, synSimplePatList, _identOption, _range) ->
-                visitor.VisitSimplePats(synSimplePatList)
+            | SynMemberDefn.ImplicitCtor(_synAccessOption, _synAttributes, simplePats, _identOption, _range) ->
+                match simplePats with
+                | SynSimplePats.SimplePats(simplePats, _) -> visitor.VisitSimplePats(simplePats)
+                | _ -> None
             | SynMemberDefn.ImplicitInherit(synType, synExpr, _identOption, range) -> 
                 [
                     dive () synType.Range (fun () -> 
