@@ -45,7 +45,7 @@ let assemblyVersion = if hasRepoVersionTag then AppVeyor.Environment.RepoTagName
 
 let buildVersion =
     if hasRepoVersionTag then assemblyVersion
-    else if isAppVeyorBuild then sprintf "%s-b%s" assemblyVersion AppVeyor.Environment.BuildNumber
+    else if isAppVeyorBuild then sprintf "%s.%s" assemblyVersion AppVeyor.Environment.BuildNumber
     else assemblyVersion
 
 Target.create "Clean" (fun _ ->
@@ -84,7 +84,7 @@ Target.create "NuGet" (fun _ ->
           Configuration = DotNet.BuildConfiguration.Release
           Common = packOpts.Common |> withDotnetExe |> DotNet.Options.withVerbosity (Some DotNet.Verbosity.Normal)
           MSBuildParams = { packOpts.MSBuildParams with
-                              Properties = packOpts.MSBuildParams.Properties @ [ "Version", assemblyVersion; "VersionPrefix", assemblyVersion; "PackageReleaseNotes", release.Notes |> String.concat "\n" ] }
+                              Properties = packOpts.MSBuildParams.Properties @ [ "Version", buildVersion; "VersionPrefix", buildVersion; "PackageReleaseNotes", release.Notes |> String.concat "\n" ] }
       }) "FSharp.Compiler.Service.sln"
 )
 
