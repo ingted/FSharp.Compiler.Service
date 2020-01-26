@@ -174,6 +174,10 @@ module internal FSharpEnvironment =
             Some locationFromAppConfig
 #endif
 
+#if BLAZOR
+    let mutable ForcedBinFolder = None
+#endif
+
     // The default location of FSharp.Core.dll and fsc.exe based on the version of fsc.exe that is running
     // Used for
     //     - location of design-time copies of FSharp.Core.dll and FSharp.Compiler.Interactive.Settings.dll for the default assumed environment for scripts
@@ -183,9 +187,10 @@ module internal FSharpEnvironment =
     //     - default F# binaries directory in (project system) Project.fs
     let BinFolderOfDefaultFSharpCompiler(probePoint:string option) =
 #if BLAZOR
-        ignore probePoint
-        Some "/tmp"
-#else
+        match ForcedBinFolder with
+        | Some f -> Some f
+        | None ->
+#endif
         // Check for an app.config setting to redirect the default compiler location
         // Like fsharp-compiler-location
         try
@@ -209,7 +214,6 @@ module internal FSharpEnvironment =
                     // For the prototype compiler, we can just use the current domain
                     tryCurrentDomain()
         with e -> None
-#endif
 
 #if !FX_NO_WIN_REGISTRY
     // Apply the given function to the registry entry corresponding to the subKey.
